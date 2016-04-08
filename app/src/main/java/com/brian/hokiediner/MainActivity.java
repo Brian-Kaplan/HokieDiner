@@ -1,25 +1,52 @@
 package com.brian.hokiediner;
 
+import java.io.BufferedReader;
+import java.io.IOException;
 import java.io.InputStream;
-import java.lang.reflect.Array;
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.List;
+import java.io.InputStreamReader;
+import java.net.URI;
+import java.util.Map;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeoutException;
+
+import org.apache.http.auth.UsernamePasswordCredentials;
+import org.apache.http.client.methods.HttpGet;
+import org.apache.http.impl.auth.BasicScheme;
+import org.apache.http.protocol.HTTP;
 import org.json.JSONObject;
 import org.wso2.mobile.idp.proxy.IDPProxyActivity;
 import org.wso2.mobile.idp.proxy.IdentityProxy;
 import org.wso2.mobile.idp.proxy.callbacks.AccessTokenCallBack;
 import org.wso2.mobile.idp.proxy.utils.ServerUtilities;
 
+import org.apache.http.HeaderElement;
+import org.apache.http.HttpEntity;
+import org.apache.http.HttpResponse;
+import org.apache.http.NameValuePair;
+import org.apache.http.ParseException;
+import org.apache.http.client.ClientProtocolException;
+import org.apache.http.client.HttpClient;
+import org.apache.http.client.methods.HttpPost;
+import org.apache.http.conn.scheme.PlainSocketFactory;
+import org.apache.http.conn.scheme.Scheme;
+import org.apache.http.conn.scheme.SchemeRegistry;
+import org.apache.http.conn.ssl.SSLSocketFactory;
+import org.apache.http.entity.ByteArrayEntity;
+import org.apache.http.impl.client.DefaultHttpClient;
+import org.apache.http.impl.conn.tsccm.ThreadSafeClientConnManager;
+import org.apache.http.params.BasicHttpParams;
+
 import android.content.Context;
+import android.content.SharedPreferences;
+import android.content.SharedPreferences.*;
+import android.os.AsyncTask;
 import android.os.Bundle;
 import android.text.Editable;
 import android.text.TextWatcher;
 import android.util.Log;
 import android.view.Menu;
 import android.view.MenuItem;
+import android.view.View;
 import android.widget.ArrayAdapter;
 import android.widget.Button;
 import android.widget.EditText;
@@ -36,6 +63,15 @@ public class MainActivity extends IDPProxyActivity implements AccessTokenCallBac
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
+
+        Button searchButton = (Button) findViewById(R.id.searchButton);
+        searchButton.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                new APITask().execute();
+            }
+        });
+
     }
 
     @Override
@@ -43,6 +79,13 @@ public class MainActivity extends IDPProxyActivity implements AccessTokenCallBac
         // Inflate the menu; this adds items to the action bar if it is present.
         getMenuInflater().inflate(R.menu.main, menu);
         this.menu = menu;
+
+        String userName = getUserName();
+        if (userName != null) {
+            MenuItem item = menu.findItem(R.id.action_settings);
+            item.setTitle("Welcome : " + userName);
+        }
+
         return true;
     }
 
@@ -61,16 +104,22 @@ public class MainActivity extends IDPProxyActivity implements AccessTokenCallBac
     }
     public void onTokenReceived() {
         try {
-            JSONObject mainObject = new JSONObject(IdentityProxy.getInstance().getToken().getIdToken().substring(27));
-            String subject = mainObject.getString("sub");
-            int index = subject.indexOf('@');
+
+            String jstring = IdentityProxy.getInstance().getToken().getIdToken();
+            String accessToken = IdentityProxy.getInstance().getToken().getAccessToken();
+            String refreshToken = IdentityProxy.getInstance().getToken().getRefreshToken();
+            String[] strings = jstring.split("\\}");
+            JSONObject payload = new JSONObject(strings[1]+"}");
+            String userName = payload.getString("sub");
+            int index = userName.indexOf('@');
             if(index>0){
-                subject = subject.substring(0, index);
+                userName = userName.substring(2, index);
             }
-            Log.v("Subject", subject);
+            Log.v("Username", userName);
+            storeUserData(accessToken, refreshToken, userName);
             MenuItem item = menu.findItem(R.id.action_settings);
             //item.setVisible(false);
-            item.setTitle("Welcome : " + subject);
+            item.setTitle("Welcome : " + userName);
             String[] diningList = {"Au Bon Pain - GLC",
                     "Au Bon Pain - Squires Cafe",
                     "Au Bon Pain - Squires Kiosk",
@@ -133,9 +182,35 @@ public class MainActivity extends IDPProxyActivity implements AccessTokenCallBac
         }
     }
 
+    private void storeUserData(String accessToken, String refreshToken, String userName) {
+        SharedPreferences sharedPreferences = getSharedPreferences("tokens", Context.MODE_PRIVATE);
+        Editor editor = sharedPreferences.edit();
+        editor.putString("ACCESS_TOKEN", accessToken);
+        editor.putString("REFRESH_TOKEN", refreshToken);
+        editor.putString("USERNAME", userName);
+        editor.apply();
+    }
+
+    private String getAccessToken() {
+        SharedPreferences sharedPreferences = getSharedPreferences("tokens", Context.MODE_PRIVATE);
+        String accessToken = sharedPreferences.getString("ACCESS_TOKEN", null);
+        return accessToken;
+    }
+
+    private String getRefreshToken() {
+        SharedPreferences sharedPreferences = getSharedPreferences("tokens", Context.MODE_PRIVATE);
+        String refreshToken = sharedPreferences.getString("REFRESH_TOKEN", null);
+        return refreshToken;
+    }
+
+    private String getUserName() {
+        SharedPreferences sharedPreferences = getSharedPreferences("tokens", Context.MODE_PRIVATE);
+        String userName = sharedPreferences.getString("USERNAME", null);
+        return userName;
+    }
+
     void setSSL(){
         InputStream inputStream = MainActivity.this.getResources().openRawResource(R.raw.truststore);
         ServerUtilities.enableSSL(inputStream, OauthCostants.TRUSTSTORE_PASSWORD);
     }
-
 }

@@ -1,77 +1,92 @@
 package com.brian.hokiediner;
 
-import java.io.BufferedReader;
-import java.io.IOException;
+
 import java.io.InputStream;
-import java.io.InputStreamReader;
-import java.net.URI;
-import java.util.Map;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeoutException;
-
-import org.apache.http.auth.UsernamePasswordCredentials;
-import org.apache.http.client.methods.HttpGet;
-import org.apache.http.impl.auth.BasicScheme;
-import org.apache.http.protocol.HTTP;
 import org.json.JSONObject;
 import org.wso2.mobile.idp.proxy.IDPProxyActivity;
 import org.wso2.mobile.idp.proxy.IdentityProxy;
+import org.wso2.mobile.idp.proxy.beans.Token;
 import org.wso2.mobile.idp.proxy.callbacks.AccessTokenCallBack;
+import org.wso2.mobile.idp.proxy.handlers.AccessTokenHandler;
+import org.wso2.mobile.idp.proxy.handlers.RefreshTokenHandler;
 import org.wso2.mobile.idp.proxy.utils.ServerUtilities;
-
-import org.apache.http.HeaderElement;
-import org.apache.http.HttpEntity;
-import org.apache.http.HttpResponse;
-import org.apache.http.NameValuePair;
-import org.apache.http.ParseException;
-import org.apache.http.client.ClientProtocolException;
-import org.apache.http.client.HttpClient;
-import org.apache.http.client.methods.HttpPost;
-import org.apache.http.conn.scheme.PlainSocketFactory;
-import org.apache.http.conn.scheme.Scheme;
-import org.apache.http.conn.scheme.SchemeRegistry;
-import org.apache.http.conn.ssl.SSLSocketFactory;
-import org.apache.http.entity.ByteArrayEntity;
-import org.apache.http.impl.client.DefaultHttpClient;
-import org.apache.http.impl.conn.tsccm.ThreadSafeClientConnManager;
-import org.apache.http.params.BasicHttpParams;
 
 import android.content.Context;
 import android.content.SharedPreferences;
-import android.content.SharedPreferences.*;
-import android.os.AsyncTask;
+import android.media.session.MediaSession;
 import android.os.Bundle;
-import android.text.Editable;
-import android.text.TextWatcher;
 import android.util.Log;
 import android.view.Menu;
 import android.view.MenuItem;
 import android.view.View;
-import android.widget.ArrayAdapter;
 import android.widget.Button;
-import android.widget.EditText;
-import android.widget.ListView;
+import android.widget.TextView;
+
+import com.google.gson.Gson;
 
 public class MainActivity extends IDPProxyActivity implements AccessTokenCallBack {
     private static String TAG = "MainActivity";
-    ArrayAdapter<String> adapter;
     Button button;
     Context context;
+    Token token;
     Menu menu;
+
+    private TextView accessTokenLabel = null;
+    private TextView tokenValidLabel = null;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
 
-        Button searchButton = (Button) findViewById(R.id.searchButton);
+        accessTokenLabel = (TextView) findViewById(R.id.accessTokenLabel);
+        tokenValidLabel = (TextView) findViewById(R.id.tokenValidLabel);
+
+        token = getSavedToken();
+        validateAccessToken();
+        accessTokenLabel.setText(getAccessToken());
+        if (getAccessToken() != null) {
+            Log.d("MainActivity", getAccessToken());
+        }
+
+        Button searchButton = (Button) findViewById(R.id.validateTokenButton);
         searchButton.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
-                new APITask().execute();
+                tokenValidLabel.setText("Checking...");
+                validateAccessToken();
             }
         });
 
+        Button refreshTokenButton = (Button) findViewById(R.id.refreshTokenButton);
+        refreshTokenButton.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                RefreshTokenHandler e = new RefreshTokenHandler(OauthConstants.CLIENT_ID, OauthConstants.CLIENT_SECRET, token);
+                try {
+                    setSSL();
+                    IdentityProxy.getInstance().init(OauthConstants.CLIENT_ID, OauthConstants.CLIENT_SECRET, MainActivity.this);
+                    IdentityProxy.getInstance().setAccessTokenURL(getAccessTokenURL());
+                    e.obtainNewAccessToken();
+                } catch (InterruptedException | ExecutionException | TimeoutException e1) {
+                    e1.printStackTrace();
+                }
+            }
+        });
+    }
+
+    private void validateAccessToken() {
+        APITask apiTask = (APITask) new APITask(new APITask.AsyncResponse() {
+            @Override
+            public void processFinish(Boolean output) {
+                if (output) {
+                    tokenValidLabel.setText("Valid Token");
+                } else
+                    tokenValidLabel.setText("Invalid Token");
+            }
+        }, getAccessToken()).execute();
     }
 
     @Override
@@ -96,15 +111,30 @@ public class MainActivity extends IDPProxyActivity implements AccessTokenCallBac
             case R.id.action_settings :
                 Log.v("Menu Clicked", "Menu Setting Clicked");
                 setSSL();
-                init(OauthCostants.CLIENT_ID,OauthCostants.CLIENT_SECRET,this);
+                init(OauthConstants.CLIENT_ID,OauthConstants.CLIENT_SECRET,this);
                 break;
         }
 
         return super.onMenuItemSelected(featureId, item);
     }
+
+    public void onNewTokenReceived() {
+        try {
+            token = IdentityProxy.getInstance().getToken();
+            storeToken(token);
+            String accessToken = IdentityProxy.getInstance().getToken().getAccessToken();
+            String refreshToken = IdentityProxy.getInstance().getToken().getRefreshToken();
+            accessTokenLabel.setText(accessToken);
+            storeUserData(accessToken, refreshToken, getUserName());
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+    }
+
     public void onTokenReceived() {
         try {
-
+            token = IdentityProxy.getInstance().getToken();
+            storeToken(token);
             String jstring = IdentityProxy.getInstance().getToken().getIdToken();
             String accessToken = IdentityProxy.getInstance().getToken().getAccessToken();
             String refreshToken = IdentityProxy.getInstance().getToken().getRefreshToken();
@@ -113,60 +143,14 @@ public class MainActivity extends IDPProxyActivity implements AccessTokenCallBac
             String userName = payload.getString("sub");
             int index = userName.indexOf('@');
             if(index>0){
-                userName = userName.substring(2, index);
+                userName = userName.substring(0, index);
             }
-            Log.v("Username", userName);
+            Log.v("Subject",userName);
+            accessTokenLabel.setText(accessToken);
             storeUserData(accessToken, refreshToken, userName);
             MenuItem item = menu.findItem(R.id.action_settings);
             //item.setVisible(false);
             item.setTitle("Welcome : " + userName);
-            String[] diningList = {"Au Bon Pain - GLC",
-                    "Au Bon Pain - Squires Cafe",
-                    "Au Bon Pain - Squires Kiosk",
-                    "Au Bon Pain at Goodwin Hall",
-                    "Burger '37",
-                    "D2",
-                    "Deet's Place",
-                    "Dunkin Donuts",
-                    "DXpress",
-                    "Hokie Grill & Co.",
-                    "Owens Food Court",
-                    "Turner Place - 1872 Fire Grill",
-                    "Turner Place - Atomic Pizzeria",
-                    "Turner Place - Bruegger's Bagels",
-                    "Turner Place - Dolci e Caffe",
-                    "Turner Place - Jamba Juice",
-                    "Turner Place - Origami Grill",
-                    "Turner Place - Origami Sushi",
-                    "Turner Place - Qdoba Mexican Grill",
-                    "Turner Place - Soup Garden",
-                    "Vet Med Cafe",
-                    "West End Market"};
-
-            ListView lv = (ListView) findViewById(R.id.diningListView);
-            adapter = new ArrayAdapter<String>(MainActivity.this, R.layout.dining_cell_model, R.id.cellTitleLabel, diningList);
-            lv.setAdapter(adapter);
-
-            EditText searchEditText = (EditText) findViewById(R.id.searchEditText);
-            searchEditText.addTextChangedListener(new TextWatcher() {
-
-                @Override
-                public void onTextChanged(CharSequence cs, int arg1, int arg2, int arg3) {
-                    // When user changed the Text
-                    MainActivity.this.adapter.getFilter().filter(cs);
-                }
-
-                @Override
-                public void beforeTextChanged(CharSequence arg0, int arg1, int arg2, int arg3) {
-                    // TODO Auto-generated method stub
-
-                }
-
-                @Override
-                public void afterTextChanged(Editable arg0) {
-                    // TODO Auto-generated method stub
-                }
-            });
         } catch (InterruptedException e) {
             // TODO Auto-generated catch block
             e.printStackTrace();
@@ -182,35 +166,59 @@ public class MainActivity extends IDPProxyActivity implements AccessTokenCallBac
         }
     }
 
+    private void storeToken(Token token) {
+        SharedPreferences sharedPreferences = getSharedPreferences("settings", Context.MODE_PRIVATE);
+        SharedPreferences.Editor prefsEditor = sharedPreferences.edit();
+        Gson gson = new Gson();
+        String json = gson.toJson(token); // myObject - instance of MyObject
+        prefsEditor.putString("token", json);
+        prefsEditor.commit();
+    }
+
+    private Token getSavedToken() {
+        SharedPreferences sharedPreferences = getSharedPreferences("settings", Context.MODE_PRIVATE);
+        Gson gson = new Gson();
+        String json = sharedPreferences.getString("token", null);
+        Token token = gson.fromJson(json, Token.class);
+        return token;
+    }
+
+
     private void storeUserData(String accessToken, String refreshToken, String userName) {
-        SharedPreferences sharedPreferences = getSharedPreferences("tokens", Context.MODE_PRIVATE);
-        Editor editor = sharedPreferences.edit();
+        SharedPreferences sharedPreferences = getSharedPreferences("settings", Context.MODE_PRIVATE);
+        SharedPreferences.Editor editor = sharedPreferences.edit();
         editor.putString("ACCESS_TOKEN", accessToken);
         editor.putString("REFRESH_TOKEN", refreshToken);
         editor.putString("USERNAME", userName);
         editor.apply();
     }
 
-    private String getAccessToken() {
-        SharedPreferences sharedPreferences = getSharedPreferences("tokens", Context.MODE_PRIVATE);
+    public String getAccessToken() {
+        SharedPreferences sharedPreferences = getSharedPreferences("settings", Context.MODE_PRIVATE);
         String accessToken = sharedPreferences.getString("ACCESS_TOKEN", null);
         return accessToken;
     }
 
-    private String getRefreshToken() {
-        SharedPreferences sharedPreferences = getSharedPreferences("tokens", Context.MODE_PRIVATE);
+    public String getRefreshToken() {
+        SharedPreferences sharedPreferences = getSharedPreferences("settings", Context.MODE_PRIVATE);
         String refreshToken = sharedPreferences.getString("REFRESH_TOKEN", null);
         return refreshToken;
     }
 
     private String getUserName() {
-        SharedPreferences sharedPreferences = getSharedPreferences("tokens", Context.MODE_PRIVATE);
+        SharedPreferences sharedPreferences = getSharedPreferences("settings", Context.MODE_PRIVATE);
         String userName = sharedPreferences.getString("USERNAME", null);
         return userName;
     }
 
+    private String getAccessTokenURL() {
+        SharedPreferences sharedPreferences = getSharedPreferences("settings", Context.MODE_PRIVATE);
+        String accessTokenUrl = sharedPreferences.getString("ACCESS_TOKEN_URL", null);
+        return accessTokenUrl;
+    }
+
     void setSSL(){
         InputStream inputStream = MainActivity.this.getResources().openRawResource(R.raw.truststore);
-        ServerUtilities.enableSSL(inputStream, OauthCostants.TRUSTSTORE_PASSWORD);
+        ServerUtilities.enableSSL(inputStream, OauthConstants.TRUSTSTORE_PASSWORD);
     }
 }
